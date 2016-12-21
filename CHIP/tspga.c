@@ -55,6 +55,7 @@ void teleportendup(int *x2,int *y2,int dir) {
 	for(i=0;i<teleports;i++) if(*x2==teleportx[i] && *y2==teleporty[i]) tid=i;
 	if(tid<0) error("teleport not found");
 	try=tid-1;
+	if(try<0) try=teleports-1;
 	while(1) {
 		tx=teleportx[try]+dx[dir];
 		ty=teleporty[try]+dy[dir];
