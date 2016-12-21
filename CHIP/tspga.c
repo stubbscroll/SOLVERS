@@ -6,7 +6,7 @@
    other lines:
      before a b (chip a to be taken before chip b, 0-indexed id)
      before2 x1,y1 x2,y2 (same, but with coordinates)
-     time d (start time for level)
+     starttime d (start time for level)
 */
 /* legend:
    . floor
