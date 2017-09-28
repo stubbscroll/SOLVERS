@@ -3,16 +3,34 @@
    input format:
    line 1: x y (map dimensions)
    lines 2-y+1: map data
-   other lines:
+   other lines (must come after map dimensions and map:
      before a b (chip a to be taken before chip b, 0-indexed id)
      before2 x1,y1 x2,y2 (same, but with coordinates)
      starttime d (start time for level)
+     lynx (for approximate lynx timing)
+     ms (for approximate ms timing)
+*/
+/* restrictions:
+   - program never steps off force floor sideways, which means entering
+     loops are pointless (program detects them as illegal moves)
+   - spring steps not supported (and hence not timed correctly)
+   - force floor ride ending in wall is just ignored (illegal move)
+   - there must be a path from each chip (and start and exit) to each chip
+   but chain of force floor, teleports etc is ok
 */
 /* legend:
-   . floor
-   : gravel
+   space . : floor (different chars for different decoration)
    $ chip
    # wall
+   ^ force floor up
+   v force floor down
+   < force floor left
+   > force floor right
+   I ice
+   ' upper left ice corner
+   ` upper right ice corner
+   + lower left ice corner
+   , lower right ice corner
    T CC1 (blue) teleport
    S starting place
    E end (can be multiple)
@@ -44,6 +62,8 @@ int startx,starty;
 int constr,con1[MAXCON],con2[MAXCON];
 double starttime;
 
+enum rulesets {MS,LYNX} ruleset=LYNX;
+
 int dist[MAXCHIPS+2][MAXCHIPS+2]; /* pairwise distances between chips (and start and end) */
 
 int dx[]={1,0,-1,0};
@@ -52,6 +72,13 @@ int dy[]={0,1,0,-1};
 /* given teleport pos and dir we entered, return where we end up */
 void teleportendup(int *x2,int *y2,int dir) {
 	int tid=-1,i,try,tx,ty;
+	if(teleports==1) {
+		*x2+=dx[dir];
+		*y2+=dy[dir];
+		if(*x2<0 || *y2<0 || *x2>=x || *y2>=y) *x2=-1;
+		else if(map[*x2][*y2]=='#') *x2=-1;
+		return;
+	}
 	for(i=0;i<teleports;i++) if(*x2==teleportx[i] && *y2==teleporty[i]) tid=i;
 	if(tid<0) error("teleport not found");
 	try=tid-1;
@@ -68,13 +95,84 @@ void teleportendup(int *x2,int *y2,int dir) {
 	}
 }
 
-/* i'm lazy and use dijkstra instead of trying to patch bfs to support edges
-   with cost 2 (teleport moves) */
+int isforcefloor(char g) {
+	return g=='<' || g=='>' || g=='^' || g=='v';
+}
+
+int forcefloorendup(int *x2,int *y2,int *d2) {
+	int len=0;
+	while(len<x*y+10) {
+		if(*x2<0 || *y2<0 || *x2>=x || *y2>=y) { *x2=-1; return 0; }
+		if(map[*x2][*y2]=='<') (*x2)--,*d2=2;
+		else if(map[*x2][*y2]=='>') (*x2)++,*d2=0;
+		else if(map[*x2][*y2]=='^') (*y2)--,*d2=3;
+		else if(map[*x2][*y2]=='v') (*y2)++,*d2=1;
+		else break;
+		len++;
+	}
+	if(len==x*y+10) *x2=-1;
+	return len;
+}
+
+int isicecornerwall(int x2,int y2,int d) {
+	char g=map[x2][y2];
+	if(g=='\'') { /* upper left */
+		if(d==0 || d==1) return 1;
+	} else if(g=='`') { /* upper right */
+		if(d==1 || d==2) return 1;
+	} else if(g=='+') { /* lower left */
+		if(d==0 || d==3) return 1;
+	} else if(g==',') { /* lower right */
+		if(d==2 || d==3) return 1;
+	}
+	return 0;
+}
+
+int isice(char g) {
+	return g=='I' || g=='\'' || g=='`' || g=='+' || g==',';
+}
+
+int iceendup(int *x2,int *y2,int *d2) {
+	int len=0;
+	while(1) {
+		if(*x2<0 || *y2<0 || *x2>=x || *y2>=y) { *x2=-1; return 0; }
+		if(map[*x2][*y2]=='I') (*x2)+=dx[*d2],(*y2)+=dy[*d2];
+		else if(map[*x2][*y2]=='\'') { /* upper left */
+			if(*d2==0 || *d2==1) { *x2=-1; return 0; }
+			else if(*d2==2) *d2=1;
+			else if(*d2==3) *d2=0;
+			(*x2)+=dx[*d2],(*y2)+=dy[*d2];
+		} else if(map[*x2][*y2]=='`') { /* upper right */
+			if(*d2==1 || *d2==2) { *x2=-1; return 0; }
+			else if(*d2==0) *d2=1;
+			else if(*d2==3) *d2=2;
+			(*x2)+=dx[*d2],(*y2)+=dy[*d2];
+		} else if(map[*x2][*y2]=='+') { /* lower left */
+			if(*d2==0 || *d2==3) { *x2=-1; return 0; }
+			else if(*d2==1) *d2=0;
+			else if(*d2==2) *d2=3;
+			(*x2)+=dx[*d2],(*y2)+=dy[*d2];
+		} else if(map[*x2][*y2]==',') { /* lower right */
+			if(*d2==2 || *d2==3) { *x2=-1; return 0; }
+			else if(*d2==0) *d2=3;
+			else if(*d2==1) *d2=2;
+			(*x2)+=dx[*d2],(*y2)+=dy[*d2];
+		} else break;
+		len++;
+	}
+	return len;
+}
+
+/* distances are multiplied by 2 to avoid decimal numbers.
+   normal floor: 2
+   teleports: lynx: 4, ms: 0
+   force floor: lynx: 1, ms: 0
+*/
 void dijkstra(int from) {
 	static int dist2[MAXMAP][MAXMAP];
 	static char taken[MAXMAP][MAXMAP];
-	int i,j,n=chips+2,bestx,besty,best,d,x2,y2,cost;
-/*	printf("find distances from %d:\n",from);*/
+	int i,j,n=chips+2,bestx,besty,best,d,x2,y2,cost,d2,slide;
+//	printf("find distances from %d:\n",from);
 	for(i=0;i<n;i++) dist[from][i]=(i==from)?0:INF;
 	for(j=0;j<y;j++) for(i=0;i<x;i++) dist2[i][j]=(id[i][j]==from)?0:INF;
 	for(j=0;j<y;j++) for(i=0;i<x;i++) taken[i][j]=0;
@@ -87,19 +185,41 @@ void dijkstra(int from) {
 			j=id[bestx][besty];
 			if(dist[from][j]==INF) {
 				dist[from][j]=dist2[bestx][besty];
-/*				printf("  to %d: %d\n",j,dist2[bestx][besty]);*/
+//				printf("  to %d: %d\n",j,dist2[bestx][besty]);
 			}
 		}
 		if(map[bestx][besty]=='E') continue;
 		for(d=0;d<4;d++) {
-			x2=bestx+dx[d]; y2=besty+dy[d];
+			x2=bestx+dx[d]; y2=besty+dy[d]; d2=d;
 			if(x2<0 || y2<0 || x2>=x || y2>=y || map[x2][y2]=='#') continue;
-			if(map[x2][y2]=='T') cost=2,teleportendup(&x2,&y2,d);
-			else cost=1;
+			if(isicecornerwall(x2,y2,d)) continue;
+			cost=0;
+			slide=0;
+		moveloop:
 			if(x2<0) continue;
+			if(map[x2][y2]=='T') {
+				cost+=(ruleset==LYNX)?2:0;
+				teleportendup(&x2,&y2,d2);
+				slide=1;
+				goto moveloop;
+			} else if(isforcefloor(map[x2][y2])) {
+				cost+=forcefloorendup(&x2,&y2,&d2);
+				if(ruleset==MS) cost--;
+				slide=1;
+				goto moveloop;
+			} else if(isice(map[x2][y2])) {
+				cost+=iceendup(&x2,&y2,&d2);
+				if(ruleset==MS) cost--;
+				slide=1;
+				goto moveloop;
+			} else if(ruleset==LYNX || (ruleset==MS && !slide)) cost+=2;
+			if(x2<0) continue;
+			if(map[x2][y2]=='#') continue;
+			if(isicecornerwall(x2,y2,d)) continue;
 			if(dist2[x2][y2]>dist2[bestx][besty]+cost) dist2[x2][y2]=dist2[bestx][besty]+cost;
 		}
 	}
+	if(from<=chips) for(i=0;i<chips+2;i++) if(dist[from][i]==INF) printf("can't go from %d to %d\n",from,i),exit(1);
 }
 
 void readinput() {
@@ -132,6 +252,7 @@ void readinput() {
 		}
 	}
 	/* calculate id-map */
+	if(chips==0) error("no chips, nothing to solve");
 	for(j=0;j<y;j++) for(i=0;i<x;i++) id[i][j]=-1;
 	for(i=0;i<chips;i++) id[chipx[i]][chipy[i]]=i;
 	id[startx][starty]=chips;
@@ -141,8 +262,6 @@ void readinput() {
 	printf("map size: %d %d\n",x,y);
 	for(i=0;i<chips;i++) printf("chip %d at (%d,%d)\n",i,chipx[i],chipy[i]);
 	printf("%d goals, %d teleports\n",goals,teleports);
-	/* calculate all-pairs shortest path */
-	for(i=0;i<chips+2;i++) dijkstra(i);
 	/* read the rest now that we have processed map */
 	while(fgets(s,9997,stdin)) {
 		if(!strncmp(s,"before",6)) {
@@ -155,8 +274,17 @@ void readinput() {
 			}
 		} else if(!strncmp(s,"starttime",9)) {
 			sscanf(s,"starttime %lf",&starttime);
+		} else if(!strncmp(s,"ms",2)) {
+			ruleset=MS;
+		} else if(!strncmp(s,"lynx",4)) {
+			ruleset=LYNX;
 		}
 	}
+	printf("ruleset: ");
+	if(ruleset==MS) printf("ms\n");
+	else printf("lynx\n");
+	/* calculate all-pairs shortest path */
+	for(i=0;i<chips+2;i++) dijkstra(i);
 }
 
 /* genetic algorithm!
@@ -223,7 +351,7 @@ void printperm(int *p) {
 }
 
 void printind(int ix) {
-	if(starttime>-10) printf("cost %d (%.1f) fitness %f dataptr %d\n",pop[ix].cost,starttime-pop[ix].cost*.2,pop[ix].fitness,pop[ix].dataptr);
+	if(starttime>-10) printf("cost %d (%.1f) fitness %f dataptr %d\n",pop[ix].cost,starttime-pop[ix].cost*.1,pop[ix].fitness,pop[ix].dataptr);
 	else printf("cost %d fitness %f dataptr %d\n",pop[ix].cost,pop[ix].fitness,pop[ix].dataptr);
 	printperm(popdata+pop[ix].dataptr*chips);
 }
