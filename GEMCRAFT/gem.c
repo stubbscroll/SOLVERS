@@ -91,7 +91,7 @@ int path[MAXLEN];
 /* stupid backtracking, could be made much faster but runtime is tolerable and
    optimal answer is found early anyway */
 void btr(double curcost,int minix,double curpower,double manalim,int at) {
-	int i;
+	int i,totstep;
 	double newcost;
 	if(at==MAXLEN) printf("error");
 	if(curpower>best) {
@@ -99,7 +99,10 @@ void btr(double curcost,int minix,double curpower,double manalim,int at) {
 		bpn=at;
 		for(i=0;i<at;i++) bestpath[i]=path[i];
 		printf("power %.4e cost %.4e",curpower,curcost);
-		for(i=0;i<at;i++) printf(" %dc",cost[bestpath[i]]);printf("\n");
+		for(i=0;i<at;i++) printf(" %dc",cost[bestpath[i]]);
+		for(totstep=i=0;i<at;i++) totstep+=steps[bestpath[i]];
+		printf(" => %d steps (%d:%02d)\n",totstep,totstep/20/60,totstep/20%60);
+		printf("\n");
 	}
 	for(i=n-1;i>=minix;i--) {
 		if(at==0) printf("- try %dc\n",cost[i]);
